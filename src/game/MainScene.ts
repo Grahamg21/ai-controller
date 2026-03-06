@@ -24,6 +24,37 @@ const COMP_ANGLES = [-150, -120, -90, -60, -30]
 // How far outside the ellipse wall the computer centre sits
 const COMP_OFFSET = 24
 
+// Zone destination hotspots per state
+const ZONE_SPOTS = {
+  beach: [
+    { x: 180, y: 560 }, { x: 380, y: 590 }, { x: 580, y: 565 },
+    { x: 780, y: 580 }, { x: 1050, y: 555 }, { x: 640, y: 620 },
+  ],
+  grass: [
+    { x: 870, y: 80 }, { x: 1020, y: 140 }, { x: 820, y: 200 },
+    { x: 1140, y: 95 }, { x: 960, y: 230 }, { x: 1200, y: 200 },
+  ],
+  water: [
+    { x: 110, y: 75 }, { x: 240, y: 145 }, { x: 380, y: 95 },
+    { x: 160, y: 215 }, { x: 320, y: 235 }, { x: 480, y: 200 },
+  ],
+  lava: [
+    { x: 160, y: 355 }, { x: 430, y: 370 }, { x: 640, y: 357 },
+    { x: 860, y: 370 }, { x: 1100, y: 355 },
+  ],
+}
+
+const STATE_ZONE: Record<string, keyof typeof ZONE_SPOTS> = {
+  idle:          'beach',
+  done:          'beach',
+  error:         'beach',
+  researching:   'grass',
+  communicating: 'water',
+  computing:     'lava',
+  thinking:      'beach', // HQ handled separately
+  walking:       'beach',
+}
+
 const TOWELS    = [100, 270, 460, 640, 820, 1050]
 const UMBRELLAS = [55, 390, 760, 1195]
 
@@ -88,6 +119,14 @@ export class MainScene extends Phaser.Scene {
   private sageContainer!:    Phaser.GameObjects.Container
   private sageSprite!:       Phaser.GameObjects.Container
   private sageNameTag!:      Phaser.GameObjects.Text
+  private sageBobGraphics!:  Phaser.GameObjects.Graphics
+  private sageBobTween!:     Phaser.Tweens.Tween
+  private sageState:         string = 'idle'
+  private sageWanderEvent:   Phaser.Time.TimerEvent | null = null
+  private sageMoveTween:     Phaser.Tweens.Tween | null = null
+  private sageWorkingCleanup: (() => void)[] = []
+  private lavaEmitter!:      Phaser.GameObjects.Particles.ParticleEmitter
+  private waterEmitter!:     Phaser.GameObjects.Particles.ParticleEmitter
   private trainerContainer!: Phaser.GameObjects.Container
   private trainerSprite!:    Phaser.GameObjects.Container
 
@@ -661,7 +700,7 @@ export class MainScene extends Phaser.Scene {
       })
     }
 
-    this.add.particles(295, 135, 'spark', {
+    this.waterEmitter = this.add.particles(295, 135, 'spark', {
       x: { min: -275, max: 275 }, y: { min: -125, max: 125 },
       speedY: { min: -25, max: -8 }, speedX: { min: -10, max: 10 },
       alpha: { start: 0.7, end: 0 }, scale: { start: 0.7, end: 0 },
@@ -703,7 +742,7 @@ export class MainScene extends Phaser.Scene {
       })
     }
 
-    this.add.particles(W / 2, ZONE.lavaEnd - 18, 'ember', {
+    this.lavaEmitter = this.add.particles(W / 2, ZONE.lavaEnd - 18, 'ember', {
       x: { min: -(W / 2), max: W / 2 }, y: { min: -18, max: 8 },
       speedY: { min: -80, max: -28 }, speedX: { min: -20, max: 20 },
       alpha: { start: 0.9, end: 0 }, scale: { start: 0.55, end: 0 },
@@ -785,7 +824,9 @@ export class MainScene extends Phaser.Scene {
       targets: orb, y: '-=6', scaleX: 1.4, scaleY: 1.4, alpha: 0.42,
       duration: 1400, yoyo: true, repeat: -1, ease: 'Sine.easeInOut',
     })
-    this.tweens.add({
+    // Store reference so zone animations can change bob speed
+    this.sageBobGraphics = g
+    this.sageBobTween = this.tweens.add({
       targets: g, y: '-=5',
       duration: 900, yoyo: true, repeat: -1, ease: 'Sine.easeInOut',
     })
@@ -833,56 +874,330 @@ export class MainScene extends Phaser.Scene {
     const sage = status.agents.find((a: any) => a.id === 'sage')
     if (!sage || !this.sageNameTag) return
 
-    // Stop any running name tag tweens before changing state
+    const newState: string = sage.state
+
+    // Update name tag color
     this.tweens.killTweensOf(this.sageNameTag)
     this.sageNameTag.setAlpha(1)
-
-    switch (sage.state) {
+    switch (newState) {
       case 'idle':
       case 'done':
-        // Dim violet — resting
         this.sageNameTag.setColor('#ce93d8')
         break
-
       case 'error':
-        // Red flicker
         this.sageNameTag.setColor('#ef5350')
         this.tweens.add({
-          targets: this.sageNameTag,
-          alpha: 0.2,
-          duration: 180,
-          yoyo: true,
-          repeat: 5,
-          ease: 'Linear',
+          targets: this.sageNameTag, alpha: 0.2,
+          duration: 180, yoyo: true, repeat: 5, ease: 'Linear',
           onComplete: () => this.sageNameTag.setAlpha(1),
         })
         break
-
       default:
-        // Working — bright cyan pulse
         this.sageNameTag.setColor('#00e5ff')
         this.tweens.add({
-          targets: this.sageNameTag,
-          alpha: 0.35,
-          duration: 600,
-          yoyo: true,
-          repeat: -1,
-          ease: 'Sine.easeInOut',
+          targets: this.sageNameTag, alpha: 0.35,
+          duration: 600, yoyo: true, repeat: -1, ease: 'Sine.easeInOut',
         })
-        break
     }
+
+    // Trigger movement only when state actually changes
+    if (newState !== this.sageState) {
+      this.sageState = newState
+      this.moveSageToState(newState)
+    }
+  }
+
+  // ── Movement routing ──────────────────────────────────────────────────────────
+
+  private moveSageToState(state: string) {
+    this.stopSageWander()
+    this.clearWorkingEffects()
+
+    if (state === 'done') {
+      this.playDoneAnimation(() => this.moveSageToBeach(false))
+      return
+    }
+    if (state === 'error') {
+      this.playErrorAnimation(() => this.moveSageToBeach(true))
+      return
+    }
+    if (state === 'idle') {
+      this.moveSageToBeach(false)
+      return
+    }
+
+    if (state === 'thinking') {
+      this.moveToHQ()
+      return
+    }
+
+    const zone = STATE_ZONE[state] ?? 'beach'
+    const spots = ZONE_SPOTS[zone as keyof typeof ZONE_SPOTS] as { x: number; y: number }[]
+    const target = Phaser.Utils.Array.GetRandom(spots)
+
+    this.sageSprite.scaleX = target.x > this.sageContainer.x ? 1 : -1
+    this.sageMoveTween = this.tweens.add({
+      targets: this.sageContainer, x: target.x, y: target.y,
+      duration: Phaser.Math.Between(2000, 4000),
+      ease: 'Sine.easeInOut',
+      onComplete: () => this.playZoneAnimation(zone),
+    })
+  }
+
+  private moveToHQ() {
+    const rad = Phaser.Math.DegToRad(COMP_ANGLES[0])
+    const target = {
+      x: HQ.cx + (HQ.rx - COMP_OFFSET) * Math.cos(rad),
+      y: HQ.cy + (HQ.ry - COMP_OFFSET) * Math.sin(rad) + 20,
+    }
+    this.sageSprite.scaleX = target.x > this.sageContainer.x ? 1 : -1
+    this.sageMoveTween = this.tweens.add({
+      targets: this.sageContainer, x: target.x, y: target.y,
+      duration: Phaser.Math.Between(2000, 4000),
+      ease: 'Sine.easeInOut',
+      onComplete: () => this.playZoneAnimation('hq'),
+    })
+  }
+
+  private moveSageToBeach(slow: boolean) {
+    const target = Phaser.Utils.Array.GetRandom(ZONE_SPOTS.beach)
+    this.sageSprite.scaleX = target.x > this.sageContainer.x ? 1 : -1
+    this.sageMoveTween = this.tweens.add({
+      targets: this.sageContainer, x: target.x, y: target.y,
+      duration: slow ? 5000 : Phaser.Math.Between(2000, 3500),
+      ease: 'Sine.easeInOut',
+      onComplete: () => this.wanderSage(),
+    })
+  }
+
+  private stopSageWander() {
+    if (this.sageWanderEvent) {
+      this.sageWanderEvent.remove(false)
+      this.sageWanderEvent = null
+    }
+    if (this.sageMoveTween) {
+      this.sageMoveTween.stop()
+      this.sageMoveTween = null
+    }
+    this.tweens.killTweensOf(this.sageContainer)
+  }
+
+  private clearWorkingEffects() {
+    this.sageWorkingCleanup.forEach(fn => fn())
+    this.sageWorkingCleanup = []
+    if (this.sageBobTween) this.sageBobTween.timeScale = 1
+  }
+
+  // ── Zone working animations ────────────────────────────────────────────────────
+
+  private playZoneAnimation(zone: string) {
+    this.clearWorkingEffects()
+    switch (zone) {
+      case 'grass': this.playGrassAnimation(); break
+      case 'water': this.playWaterAnimation(); break
+      case 'lava':  this.playLavaAnimation();  break
+      case 'hq':    this.playHQAnimation();    break
+    }
+  }
+
+  private playGrassAnimation() {
+    if (this.sageBobTween) this.sageBobTween.timeScale = 2.2
+
+    const burst = () => {
+      if (this.sageState !== 'researching') return
+      for (let i = 0; i < 4; i++) {
+        const px = this.sageContainer.x + Phaser.Math.Between(-18, 18)
+        const py = this.sageContainer.y + Phaser.Math.Between(-10, 10)
+        const dot = this.add.arc(px, py, 3, 0, 360, false, 0x66bb6a, 0.9)
+        dot.setBlendMode(Phaser.BlendModes.ADD).setDepth(11)
+        this.tweens.add({
+          targets: dot, y: py - 32, alpha: 0,
+          duration: 900, ease: 'Sine.easeOut',
+          onComplete: () => dot.destroy(),
+        })
+      }
+      const item = this.add.arc(
+        this.sageContainer.x, this.sageContainer.y - 12,
+        4, 0, 360, false, 0xfff176, 1,
+      )
+      item.setBlendMode(Phaser.BlendModes.ADD).setDepth(12)
+      this.tweens.add({
+        targets: item, y: this.sageContainer.y - 50, alpha: 0,
+        duration: 1400, ease: 'Sine.easeOut',
+        onComplete: () => item.destroy(),
+      })
+    }
+
+    burst()
+    const event = this.time.addEvent({ delay: 3000, callback: burst, loop: true })
+    this.sageWorkingCleanup.push(() => {
+      event.remove(false)
+      if (this.sageBobTween) this.sageBobTween.timeScale = 1
+    })
+  }
+
+  private playWaterAnimation() {
+    if (this.sageBobTween) this.sageBobTween.timeScale = 0.55
+
+    const ripple = () => {
+      if (this.sageState !== 'communicating') return
+      const ring = this.add.arc(
+        this.sageContainer.x, this.sageContainer.y + 14,
+        5, 0, 360, false, 0x42a5f5, 0,
+      )
+      ring.setStrokeStyle(1.5, 0x42a5f5, 0.8)
+      ring.setBlendMode(Phaser.BlendModes.ADD).setDepth(11)
+      this.tweens.add({
+        targets: ring, scaleX: 9, scaleY: 9, alpha: 0,
+        duration: 1800, ease: 'Sine.easeOut',
+        onComplete: () => ring.destroy(),
+      })
+    }
+
+    ripple()
+    const event = this.time.addEvent({ delay: 2000, callback: ripple, loop: true })
+    this.sageWorkingCleanup.push(() => {
+      event.remove(false)
+      if (this.sageBobTween) this.sageBobTween.timeScale = 1
+    })
+  }
+
+  private playLavaAnimation() {
+    if (this.sageBobTween) this.sageBobTween.timeScale = 1.9
+
+    const aura = this.add.arc(
+      this.sageContainer.x, this.sageContainer.y,
+      22, 0, 360, false, 0xff5722, 0,
+    )
+    aura.setBlendMode(Phaser.BlendModes.ADD).setDepth(9)
+    const auraTween = this.tweens.add({
+      targets: aura, fillAlpha: 0.6, scaleX: 1.6, scaleY: 1.6,
+      duration: 800, yoyo: true, repeat: -1, ease: 'Sine.easeInOut',
+    })
+
+    const emitter = this.add.particles(
+      this.sageContainer.x, this.sageContainer.y - 10, 'ember', {
+        x: { min: -12, max: 12 }, y: { min: -12, max: 12 },
+        speedY: { min: -60, max: -20 }, speedX: { min: -15, max: 15 },
+        alpha: { start: 0.8, end: 0 }, scale: { start: 0.5, end: 0 },
+        tint: [0xff5722, 0xff9800, 0xffcc02],
+        lifespan: { min: 600, max: 1200 }, frequency: 120, quantity: 1,
+        blendMode: Phaser.BlendModes.ADD,
+      },
+    )
+    emitter.setDepth(11)
+
+    this.sageWorkingCleanup.push(() => {
+      auraTween.stop(); aura.destroy(); emitter.destroy()
+      if (this.sageBobTween) this.sageBobTween.timeScale = 1
+    })
+  }
+
+  private playHQAnimation() {
+    if (this.sageBobTween) this.sageBobTween.timeScale = 0
+
+    const bubbles: Phaser.GameObjects.Arc[] = []
+    for (let i = 0; i < 3; i++) {
+      const b = this.add.arc(
+        this.sageContainer.x + 4 + i * 7,
+        this.sageContainer.y - 28 - i * 6,
+        3 + i, 0, 360, false, 0xffffff, 0,
+      )
+      b.setDepth(11)
+      this.tweens.add({
+        targets: b, fillAlpha: 0.7,
+        duration: 400, yoyo: true, repeat: -1,
+        ease: 'Sine.easeInOut', delay: i * 250,
+      })
+      bubbles.push(b)
+    }
+
+    const cloud = this.add.arc(
+      this.sageContainer.x + 20, this.sageContainer.y - 44,
+      9, 0, 360, false, 0xffffff, 0,
+    )
+    cloud.setDepth(11)
+    const cloudTween = this.tweens.add({
+      targets: cloud, fillAlpha: 0.65, scaleX: 1.7, scaleY: 0.9,
+      duration: 900, yoyo: true, repeat: -1, ease: 'Sine.easeInOut',
+    })
+
+    this.sageWorkingCleanup.push(() => {
+      bubbles.forEach(b => b.destroy())
+      cloudTween.stop(); cloud.destroy()
+      if (this.sageBobTween) this.sageBobTween.timeScale = 1
+    })
+  }
+
+  // ── Done / Error animations ───────────────────────────────────────────────────
+
+  private playDoneAnimation(onComplete: () => void) {
+    const cx = this.sageContainer.x
+    const cy = this.sageContainer.y
+
+    const flash = this.add.arc(cx, cy, 28, 0, 360, false, 0xffffff, 0.7)
+    flash.setBlendMode(Phaser.BlendModes.ADD).setDepth(12)
+    this.tweens.add({
+      targets: flash, scaleX: 2.6, scaleY: 2.6, fillAlpha: 0,
+      duration: 600, ease: 'Sine.easeOut',
+      onComplete: () => { flash.destroy(); onComplete() },
+    })
+
+    for (let i = 0; i < 7; i++) {
+      const angle = (i / 7) * Math.PI * 2
+      const spark = this.add.arc(cx, cy, 3, 0, 360, false, 0xfff9c4, 1)
+      spark.setBlendMode(Phaser.BlendModes.ADD).setDepth(12)
+      this.tweens.add({
+        targets: spark,
+        x: cx + Math.cos(angle) * 42,
+        y: cy + Math.sin(angle) * 42,
+        alpha: 0,
+        duration: 520, ease: 'Sine.easeOut',
+        onComplete: () => spark.destroy(),
+      })
+    }
+  }
+
+  private playErrorAnimation(onComplete: () => void) {
+    const cx = this.sageContainer.x
+    const cy = this.sageContainer.y
+
+    const flash = this.add.arc(cx, cy, 28, 0, 360, false, 0xef5350, 0.6)
+    flash.setBlendMode(Phaser.BlendModes.ADD).setDepth(12)
+    this.tweens.add({
+      targets: flash, scaleX: 2.4, scaleY: 2.4, fillAlpha: 0,
+      duration: 500, ease: 'Sine.easeOut',
+      onComplete: () => flash.destroy(),
+    })
+
+    const origX = this.sageContainer.x
+    let shakes = 0
+    const shake = () => {
+      if (shakes >= 5) { this.sageContainer.x = origX; onComplete(); return }
+      shakes++
+      this.tweens.add({
+        targets: this.sageContainer,
+        x: origX + (shakes % 2 === 0 ? 7 : -7),
+        duration: 55, ease: 'Linear',
+        onComplete: shake,
+      })
+    }
+    shake()
   }
 
   // ── Movement ──────────────────────────────────────────────────────────────────
 
   private wanderSage() {
-    this.time.addEvent({
+    // Only wander when on the beach
+    if (!['idle', 'done', 'error'].includes(this.sageState)) return
+    this.sageWanderEvent = this.time.addEvent({
       delay: Phaser.Math.Between(2800, 5200),
       callback: () => {
+        if (!['idle', 'done', 'error'].includes(this.sageState)) return
         const tx = Phaser.Math.Between(80, W - 80)
         const ty = Phaser.Math.Between(ZONE.beachStart + 40, H - 44)
         this.sageSprite.scaleX = tx > this.sageContainer.x ? 1 : -1
-        this.tweens.add({
+        this.sageMoveTween = this.tweens.add({
           targets: this.sageContainer, x: tx, y: ty,
           duration: Phaser.Math.Between(1800, 3200),
           ease: 'Sine.easeInOut',
