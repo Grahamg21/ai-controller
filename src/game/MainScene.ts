@@ -125,10 +125,14 @@ export class MainScene extends Phaser.Scene {
   private sageWanderEvent:   Phaser.Time.TimerEvent | null = null
   private sageMoveTween:     Phaser.Tweens.Tween | null = null
   private sageWorkingCleanup: (() => void)[] = []
-  private lavaEmitter!:      Phaser.GameObjects.Particles.ParticleEmitter
-  private waterEmitter!:     Phaser.GameObjects.Particles.ParticleEmitter
-  private trainerContainer!: Phaser.GameObjects.Container
-  private trainerSprite!:    Phaser.GameObjects.Container
+  private lavaEmitter!:       Phaser.GameObjects.Particles.ParticleEmitter
+  private waterEmitter!:      Phaser.GameObjects.Particles.ParticleEmitter
+  private trainerContainer!:  Phaser.GameObjects.Container
+  private trainerSprite!:     Phaser.GameObjects.Container
+  private trainerState:       'relaxed' | 'alert' | 'busy' | 'stressed' = 'relaxed'
+  private trainerAlertText:   Phaser.GameObjects.Text | null = null
+  private trainerWanderEvent: Phaser.Time.TimerEvent | null = null
+  private trainerMoveTween:   Phaser.Tweens.Tween | null = null
 
   constructor() {
     super({ key: 'MainScene' })
@@ -153,6 +157,28 @@ export class MainScene extends Phaser.Scene {
 
     // Listen for live status data pushed from React via the event bridge
     this.game.events.on('statusUpdate', (status: any) => this.handleStatusUpdate(status))
+
+    // Click interactions — emit events to React
+    this.input.setTopOnly(false)
+    this.sageContainer.setInteractive(new Phaser.Geom.Circle(0, 0, 28), Phaser.Geom.Circle.Contains)
+    this.sageContainer.on('pointerdown', () => {
+      this.game.events.emit('agentClicked', {
+        id: 'sage', name: 'Sage', type: 'Psychic',
+        state: this.sageState, current_task: null,
+        x: this.sageContainer.x, y: this.sageContainer.y,
+      })
+      this.trainerWalkTo(this.sageContainer.x + 38, this.sageContainer.y)
+    })
+
+    this.trainerContainer.setInteractive(new Phaser.Geom.Circle(0, 0, 28), Phaser.Geom.Circle.Contains)
+    this.trainerContainer.on('pointerdown', () => {
+      this.game.events.emit('trainerClicked', {})
+    })
+
+    // When React tells trainer to walk to an agent (future use)
+    this.game.events.on('agentClicked', () => {
+      if (this.trainerState === 'busy') return
+    })
   }
 
   // ── Particle textures ─────────────────────────────────────────────────────────
@@ -905,6 +931,9 @@ export class MainScene extends Phaser.Scene {
       this.sageState = newState
       this.moveSageToState(newState)
     }
+
+    // Update trainer state based on overall system state
+    this.updateTrainerState(status.agents)
   }
 
   // ── Movement routing ──────────────────────────────────────────────────────────
@@ -1208,7 +1237,7 @@ export class MainScene extends Phaser.Scene {
   }
 
   private wanderTrainer() {
-    // Compute a few computer positions to visit
+    if (this.trainerState !== 'relaxed') return
     const compSpot = (idx: number) => {
       const rad = Phaser.Math.DegToRad(COMP_ANGLES[idx])
       return {
@@ -1217,20 +1246,19 @@ export class MainScene extends Phaser.Scene {
       }
     }
     const spots = [
-      { x: HQ.cx,           y: HQ.cy + 22 },
-      compSpot(0),
-      compSpot(2),
-      compSpot(4),
-      { x: 380,             y: ZONE.beachStart + 55 },
-      { x: 900,             y: ZONE.beachStart + 60 },
-      { x: HQ.cx,           y: HQ.cy + HQ.ry + 18 },
+      { x: HQ.cx,  y: HQ.cy + 22 },
+      compSpot(0), compSpot(2), compSpot(4),
+      { x: 380,    y: ZONE.beachStart + 55 },
+      { x: 900,    y: ZONE.beachStart + 60 },
+      { x: HQ.cx,  y: HQ.cy + HQ.ry + 18 },
     ]
-    this.time.addEvent({
+    this.trainerWanderEvent = this.time.addEvent({
       delay: Phaser.Math.Between(4000, 7000),
       callback: () => {
+        if (this.trainerState !== 'relaxed') return
         const target = Phaser.Utils.Array.GetRandom(spots)
         this.trainerSprite.scaleX = target.x > this.trainerContainer.x ? 1 : -1
-        this.tweens.add({
+        this.trainerMoveTween = this.tweens.add({
           targets: this.trainerContainer, ...target,
           duration: Phaser.Math.Between(2000, 4000),
           ease: 'Sine.easeInOut',
@@ -1238,5 +1266,106 @@ export class MainScene extends Phaser.Scene {
         })
       },
     })
+  }
+
+  // ── Trainer state machine ──────────────────────────────────────────────────────
+
+  private stopTrainerWander() {
+    if (this.trainerWanderEvent) { this.trainerWanderEvent.remove(false); this.trainerWanderEvent = null }
+    if (this.trainerMoveTween)  { this.trainerMoveTween.stop(); this.trainerMoveTween = null }
+    this.tweens.killTweensOf(this.trainerContainer)
+  }
+
+  private showTrainerAlert() {
+    if (this.trainerAlertText) return
+    this.trainerAlertText = this.add.text(
+      this.trainerContainer.x, this.trainerContainer.y - 40,
+      '!', { fontSize: '14px', color: '#ffe082', fontFamily: FONT },
+    ).setOrigin(0.5, 1).setDepth(15)
+    this.tweens.add({
+      targets: this.trainerAlertText, y: '-=6',
+      duration: 380, yoyo: true, repeat: -1, ease: 'Sine.easeInOut',
+    })
+  }
+
+  private hideTrainerAlert() {
+    if (!this.trainerAlertText) return
+    this.tweens.killTweensOf(this.trainerAlertText)
+    this.trainerAlertText.destroy()
+    this.trainerAlertText = null
+  }
+
+  private showSweatDrop() {
+    const sx = this.trainerContainer.x + 12
+    const sy = this.trainerContainer.y - 18
+    const drop = this.add.arc(sx, sy, 5, 0, 360, false, 0x90caf9, 0.9)
+    drop.setDepth(15)
+    let drips = 0
+    const drip = () => {
+      if (drips >= 3) { drop.destroy(); return }
+      drips++
+      this.tweens.add({
+        targets: drop, y: drop.y + 8, alpha: 0,
+        duration: 500, ease: 'Sine.easeIn',
+        onComplete: () => { drop.setAlpha(0.9); drop.y = sy; drip() },
+      })
+    }
+    drip()
+  }
+
+  private trainerWalkTo(tx: number, ty: number, onDone?: () => void) {
+    this.stopTrainerWander()
+    this.trainerSprite.scaleX = tx > this.trainerContainer.x ? 1 : -1
+    this.trainerMoveTween = this.tweens.add({
+      targets: this.trainerContainer, x: tx, y: ty,
+      duration: Phaser.Math.Between(1000, 1800),
+      ease: 'Sine.easeInOut',
+      onComplete: () => onDone?.(),
+    })
+  }
+
+  private updateTrainerState(agents: any[]) {
+    if (this.trainerState === 'busy') return
+
+    const errorAgent  = agents.find((a: any) => a.state === 'error')
+    const activeAgent = agents.find((a: any) => !['idle', 'done', 'error', 'walking'].includes(a.state))
+
+    if (errorAgent) {
+      if (this.trainerState !== 'stressed') {
+        this.trainerState = 'stressed'
+        this.stopTrainerWander()
+        this.hideTrainerAlert()
+        this.showSweatDrop()
+        // Walk toward errored agent
+        const tx = this.sageContainer.x - 42
+        const ty = this.sageContainer.y
+        this.trainerWalkTo(tx, ty, () => {
+          // Return to relaxed after reaching agent
+          this.time.delayedCall(2000, () => {
+            this.trainerState = 'relaxed'
+            this.wanderTrainer()
+          })
+        })
+      }
+    } else if (activeAgent) {
+      if (this.trainerState === 'relaxed') {
+        this.trainerState = 'alert'
+        this.stopTrainerWander()
+        // Face toward Sage
+        this.trainerSprite.scaleX = this.sageContainer.x > this.trainerContainer.x ? 1 : -1
+        this.showTrainerAlert()
+        // Update alert ! position to match trainer
+        if (this.trainerAlertText) {
+          this.trainerAlertText.x = this.trainerContainer.x
+          this.trainerAlertText.y = this.trainerContainer.y - 40
+        }
+      }
+    } else {
+      if (this.trainerState === 'alert' || this.trainerState === 'stressed') {
+        this.trainerState = 'relaxed'
+        this.hideTrainerAlert()
+        this.wanderTrainer()
+      }
+    }
   }
 }
