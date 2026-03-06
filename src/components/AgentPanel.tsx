@@ -7,6 +7,7 @@ interface AgentPanelProps {
     type: string
     state: string
     current_task: string | null
+    highlights: string[]
   }
   onClose: () => void
 }
@@ -96,12 +97,25 @@ export function AgentPanel({ agent, onClose }: AgentPanelProps) {
         </div>
 
         {/* Current task */}
-        <div style={{ borderTop: '1px solid #1a3a4a', paddingTop: 14, marginBottom: 18 }}>
+        <div style={{ borderTop: '1px solid #1a3a4a', paddingTop: 14, marginBottom: 14 }}>
           <div style={{ fontSize: 7, color: '#546e7a', marginBottom: 6 }}>CURRENT TASK</div>
           <div style={{ fontSize: 8, color: '#e0f7fa', lineHeight: 1.8 }}>
             {agent.current_task ?? '[ none ]'}
           </div>
         </div>
+
+        {/* Agent highlights */}
+        {agent.highlights.length > 0 && (
+          <div style={{ borderTop: '1px solid #1a3a4a', paddingTop: 14, marginBottom: 18 }}>
+            <div style={{ fontSize: 7, color: '#546e7a', marginBottom: 10 }}>HIGHLIGHTS</div>
+            {agent.highlights.map((h, i) => (
+              <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 8, alignItems: 'flex-start' }}>
+                <span style={{ fontSize: 8, color: '#4dd0e1', flexShrink: 0 }}>▸</span>
+                <span style={{ fontSize: 7, color: '#e0f7fa', lineHeight: 1.8 }}>{h}</span>
+              </div>
+            ))}
+          </div>
+        )}
 
         {/* Hint */}
         <div style={{ fontSize: 6, color: '#1a3a4a', textAlign: 'right' }}>

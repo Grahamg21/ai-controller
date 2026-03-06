@@ -10,6 +10,33 @@ ASSISTANT_PATH = Path(os.getenv("ASSISTANT_PATH", "C:/Users/Graham/Projects/Assi
 TODAY = date.today().isoformat()  # e.g. "2026-03-06"
 
 
+def get_highlights_for_sage() -> list[str]:
+    """3 contextual bullet points Sage surfaces about herself."""
+    highlights = []
+
+    # Bullet 1 — task load
+    open_tasks = _count_open_tasks()
+    due_today  = _count_tasks_due_today()
+    if due_today > 0:
+        highlights.append(f"{open_tasks} tasks open — {due_today} due today")
+    else:
+        highlights.append(f"{open_tasks} tasks open in Todoist")
+
+    # Bullet 2 — role
+    highlights.append("Daily planning & brainstorming")
+
+    # Bullet 3 — last workout (a relevant personal context item)
+    last = _last_workout_date()
+    if _workout_today():
+        highlights.append("Workout logged today")
+    elif last:
+        highlights.append(f"Last workout: {last}")
+    else:
+        highlights.append("No workout logged yet this week")
+
+    return highlights
+
+
 def get_summary() -> dict:
     return {
         "open_tasks":     _count_open_tasks(),

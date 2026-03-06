@@ -1,7 +1,13 @@
 import json
 from pathlib import Path
+from data_reader import get_highlights_for_sage
 
 AGENTS_DIR = Path(__file__).parent.parent / "agents"
+
+# Map agent id → highlight generator function
+_HIGHLIGHT_GENERATORS = {
+    "sage": get_highlights_for_sage,
+}
 
 
 def get_all_agents() -> list[dict]:
@@ -11,13 +17,16 @@ def get_all_agents() -> list[dict]:
             continue
         try:
             data = json.loads(f.read_text(encoding="utf-8"))
+            agent_id = data.get("id", f.stem)
+            gen = _HIGHLIGHT_GENERATORS.get(agent_id)
             agents.append({
-                "id":           data.get("id", f.stem),
+                "id":           agent_id,
                 "name":         data.get("name", f.stem),
                 "type":         data.get("type", "Normal"),
                 "state":        data.get("state", "idle"),
                 "current_task": data.get("current_task"),
                 "zone":         _state_to_zone(data.get("state", "idle")),
+                "highlights":   gen() if gen else [],
             })
         except Exception:
             pass

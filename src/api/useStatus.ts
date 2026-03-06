@@ -7,6 +7,7 @@ export interface AgentStatus {
   state: string
   current_task: string | null
   zone: string
+  highlights: string[]
 }
 
 export interface DashboardSummary {

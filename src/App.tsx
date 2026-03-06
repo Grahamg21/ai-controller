@@ -16,6 +16,7 @@ interface SelectedAgent {
   type: string
   state: string
   current_task: string | null
+  highlights: string[]
 }
 
 function App() {
@@ -31,9 +32,11 @@ function App() {
 
   // Listen for click events emitted by Phaser
   useEffect(() => {
-    const onAgentClicked = (data: SelectedAgent) => {
+    const onAgentClicked = (data: Omit<SelectedAgent, 'highlights'>) => {
       setShowCommandPanel(false)
-      setSelectedAgent(data)
+      // Merge live highlights from last status poll if available
+      const liveAgent = status?.agents.find(a => a.id === data.id)
+      setSelectedAgent({ ...data, highlights: liveAgent?.highlights ?? [] })
     }
     const onTrainerClicked = () => {
       setSelectedAgent(null)
@@ -57,12 +60,18 @@ function App() {
     }
   }, [])
 
-  // Sync live state into the selected agent panel if already open
+  // Sync live state + highlights into the selected agent panel if already open
   useEffect(() => {
     if (!selectedAgent || !status) return
     const live = status.agents.find(a => a.id === selectedAgent.id)
-    if (live && live.state !== selectedAgent.state) {
-      setSelectedAgent(prev => prev ? { ...prev, state: live.state, current_task: live.current_task } : null)
+    if (!live) return
+    if (live.state !== selectedAgent.state || live.highlights !== selectedAgent.highlights) {
+      setSelectedAgent(prev => prev ? {
+        ...prev,
+        state: live.state,
+        current_task: live.current_task,
+        highlights: live.highlights,
+      } : null)
     }
   }, [status])
 
