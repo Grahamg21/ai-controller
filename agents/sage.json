@@ -1,0 +1,15 @@
+{
+  "id": "sage",
+  "name": "Sage",
+  "role": "Daily planning and brainstorming",
+  "type": "Psychic",
+  "home_zone": "beach",
+  "state": "idle",
+  "current_task": null,
+  "last_active": null,
+  "self_description": "A calm, silver-robed figure with glowing violet eyes and a small floating orb that pulses when thinking.",
+  "system_prompt_path": "agents/sage/system_prompt.md",
+  "memory_files": ["preferences.md", "tasks.md", "daily_log.md"],
+  "tools": ["todoist_api", "google_calendar"],
+  "schedule": "0 20 5 * * 1-5"
+}

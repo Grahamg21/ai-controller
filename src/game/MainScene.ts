@@ -87,6 +87,7 @@ function seededVal(x: number, y: number, scale = 1): number {
 export class MainScene extends Phaser.Scene {
   private sageContainer!:    Phaser.GameObjects.Container
   private sageSprite!:       Phaser.GameObjects.Container
+  private sageNameTag!:      Phaser.GameObjects.Text
   private trainerContainer!: Phaser.GameObjects.Container
   private trainerSprite!:    Phaser.GameObjects.Container
 
@@ -110,6 +111,9 @@ export class MainScene extends Phaser.Scene {
     this.spawnTrainer()
     this.spawnSage()
     this.drawVignette()
+
+    // Listen for live status data pushed from React via the event bridge
+    this.game.events.on('statusUpdate', (status: any) => this.handleStatusUpdate(status))
   }
 
   // ── Particle textures ─────────────────────────────────────────────────────────
@@ -748,11 +752,10 @@ export class MainScene extends Phaser.Scene {
     this.sageSprite = this.add.container(0, 0)
     this.buildSageSprite(this.sageSprite)
     this.sageContainer.add(this.sageSprite)
-    this.sageContainer.add(
-      this.add.text(0, 28, 'SAGE', {
-        fontSize: '7px', color: '#ce93d8', fontFamily: FONT,
-      }).setOrigin(0.5, 0),
-    )
+    this.sageNameTag = this.add.text(0, 28, 'SAGE', {
+      fontSize: '7px', color: '#ce93d8', fontFamily: FONT,
+    }).setOrigin(0.5, 0)
+    this.sageContainer.add(this.sageNameTag)
     this.wanderSage()
   }
 
@@ -821,6 +824,53 @@ export class MainScene extends Phaser.Scene {
       targets: g, y: '-=3',
       duration: 1200, yoyo: true, repeat: -1, ease: 'Sine.easeInOut',
     })
+  }
+
+  // ── Status updates from backend ───────────────────────────────────────────────
+
+  private handleStatusUpdate(status: any) {
+    if (!status?.agents) return
+    const sage = status.agents.find((a: any) => a.id === 'sage')
+    if (!sage || !this.sageNameTag) return
+
+    // Stop any running name tag tweens before changing state
+    this.tweens.killTweensOf(this.sageNameTag)
+    this.sageNameTag.setAlpha(1)
+
+    switch (sage.state) {
+      case 'idle':
+      case 'done':
+        // Dim violet — resting
+        this.sageNameTag.setColor('#ce93d8')
+        break
+
+      case 'error':
+        // Red flicker
+        this.sageNameTag.setColor('#ef5350')
+        this.tweens.add({
+          targets: this.sageNameTag,
+          alpha: 0.2,
+          duration: 180,
+          yoyo: true,
+          repeat: 5,
+          ease: 'Linear',
+          onComplete: () => this.sageNameTag.setAlpha(1),
+        })
+        break
+
+      default:
+        // Working — bright cyan pulse
+        this.sageNameTag.setColor('#00e5ff')
+        this.tweens.add({
+          targets: this.sageNameTag,
+          alpha: 0.35,
+          duration: 600,
+          yoyo: true,
+          repeat: -1,
+          ease: 'Sine.easeInOut',
+        })
+        break
+    }
   }
 
   // ── Movement ──────────────────────────────────────────────────────────────────

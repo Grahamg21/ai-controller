@@ -25,6 +25,9 @@ export function GameCanvas() {
       },
     })
 
+    // Expose the Phaser event emitter so App.tsx can push data into the game
+    window.__phaserEvents = gameRef.current.events
+
     // Cleanup when the component unmounts
     return () => {
       gameRef.current?.destroy(true)
